@@ -1,3 +1,46 @@
+# libindi FTDI Shutter release fix (Nikon)
+This is the defuault [INDI lib](https://www.github.com/indilib/indi) with the
+exeption of the 3rd party gphoto driver.
+The serial shutter release (FT245 in my case) for Nikon (D5100 in my case)
+didn't work for me, so I've written myself a fix with the
+[libftdi](https://www.intra2net.com/en/developer/libftdi) drivers.
+
+## Building
+
+```
+mkdir build
+cd build
+mkdir indi-gphoto
+cd indi-eqmod
+cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Debug ../../3rdparty/indi-gphoto
+make
+sudo make install
+```
+
+## Usage
+
+`libftdi` does not use ports for connecting to devices, hence, I've switched
+the `Port` field to a `Serial` field, whereby one selects the exact device
+thats going to connect.
+You can get the serial of a device by running (suppose its serial port is
+`/dev/ttyUSB0`):
+```
+udevadm info -a -n /dev/ttyUSB0 | grep '{serial}' | head -n1
+```
+Alternatively you can also specify `auto` as `Serial`, however, this could lead
+to a connection to a different free FTDI device if available.
+If `Serial` left empty, the shutter is handeled internally by the camera (not
+longer than 30s).
+All shutter speeds faster than 0.2s will be handeled by the camera internally by default.
+
+**WARNING** Once an exposure was handeled by the camera internally and the
+display of the camera spells Connecting to computer, you can still go on and
+capture frames that are timed internally, but going back to the external
+shutter release won't work. You will have to restart the INDI server.
+
+Also the exposure time is gauged to output the correct exposure in the exif
+headers with mirror prerelease activated on the Nikon D5100.
+
 # libindi
 [![Build Status](https://travis-ci.org/indilib/indi.svg?branch=master)](https://travis-ci.org/indilib/indi)
 [![CircleCI](https://circleci.com/gh/indilib/indi.svg?style=svg)](https://circleci.com/gh/indilib/indi)
