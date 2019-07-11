@@ -6,7 +6,7 @@ didn't work for me, so I've written myself a fix with the
 [libftdi](https://www.intra2net.com/en/developer/libftdi) drivers.
 
 ## Building
-
+Make sure `libindi` is installed (Debian/Ubuntu `sudo apt install libindi-dev`) 
 ```
 mkdir build
 cd build
