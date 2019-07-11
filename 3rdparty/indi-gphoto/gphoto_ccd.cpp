@@ -370,7 +370,8 @@ bool GPhotoCCD::initProperties()
 
     FI::initProperties(FOCUS_TAB);
 
-    IUFillText(&mPortT[0], "PORT", "Port", "");
+    //IUFillText(&mPortT[0], "PORT", "Port", "");
+    IUFillText(&mPortT[0], "PORT", "Serial", "");
     IUFillTextVector(&PortTP, mPortT, NARRAY(mPortT), getDeviceName(), "DEVICE_PORT", "Shutter Release",
                      MAIN_CONTROL_TAB, IP_RW, 0, IPS_IDLE);
 

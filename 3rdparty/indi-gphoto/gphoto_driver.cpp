@@ -27,6 +27,7 @@
 #include <tiffio.h>
 #include <tiffio.hxx>
 #include <cstdlib>
+#include <ftdi.h>
 
 #include <config.h>
 #include <indilogger.h>
@@ -135,6 +136,8 @@ struct _gphoto_driver
 
     char bulb_port[256];
     int bulb_fd;
+
+    ftdi_context *ftdi;
 
     int exposure_cnt;
     double *exposureList;
@@ -625,20 +628,23 @@ static void *stop_bulb(void *arg)
                         gphoto_set_widget_num(gphoto, gphoto->bulb_widget, FALSE);
                     }
                 }
-                if (gphoto->bulb_port[0] && (gphoto->bulb_fd >= 0))
+                if (gphoto->bulb_port[0] && gphoto->ftdi != nullptr && gphoto->bulb_fd >= 0)
                 {
+                    // Close Nikon Shutter
                     DEBUGDEVICE(device, INDI::Logger::DBG_DEBUG, "Closing remote serial shutter.");
 
-                    // Close Nikon Shutter
-                    if (!strstr(device, "Nikon"))
-                    {
-                        uint8_t close_shutter[3] = {0xFF, 0x01, 0x00};
-                        if (write(gphoto->bulb_fd, close_shutter, 3) != 3)
-                            DEBUGDEVICE(device, INDI::Logger::DBG_WARNING, "Closing Nikon remote serial shutter failed.");
+                    uint8_t buf[1] = {0x00};
+                    if (ftdi_write_data(gphoto->ftdi, buf, 1) < 0)
+                    {                        
+                        DEBUGFDEVICE(device, INDI::Logger::DBG_WARNING, "FTDI write failed for %x: %s", buf[0], ftdi_get_error_string(gphoto->ftdi));
                     }
-
-                    ioctl(gphoto->bulb_fd, TIOCMBIC, &RTS_flag);
-                    close(gphoto->bulb_fd);
+ 
+                    ftdi_disable_bitbang(gphoto->ftdi);
+                    
+                    ftdi_usb_close(gphoto->ftdi);
+                    ftdi_free(gphoto->ftdi);
+                    
+                    gphoto->bulb_fd = -1;
                 }
                 gphoto->command |= DSLR_CMD_DONE;
                 pthread_cond_signal(&gphoto->signal);
@@ -1008,27 +1014,27 @@ int gphoto_mirrorlock(gphoto_driver *gphoto, int msec)
         return 0;
     }
 
-    if (gphoto->bulb_port[0])
-    {
-        DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Locking mirror by opening remote serial shutter port: %s ...",
-                     gphoto->bulb_port);
-        gphoto->bulb_fd = open(gphoto->bulb_port, O_RDWR, O_NONBLOCK);
-        if (gphoto->bulb_fd < 0)
-        {
-            DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Failed to open serial port: %s", gphoto->bulb_port);
-            //pthread_mutex_unlock(&gphoto->mutex);
-            return -1;
-        }
+    // if (gphoto->bulb_port[0])
+    // {
+    //     DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Locking mirror by opening remote serial shutter port: %s ...",
+    //                  gphoto->bulb_port);
+    //     gphoto->bulb_fd = open(gphoto->bulb_port, O_RDWR, O_NONBLOCK);
+    //     if (gphoto->bulb_fd < 0)
+    //     {
+    //         DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Failed to open serial port: %s", gphoto->bulb_port);
+    //         //pthread_mutex_unlock(&gphoto->mutex);
+    //         return -1;
+    //     }
 
-        ioctl(gphoto->bulb_fd, TIOCMBIS, &RTS_flag);
+    //     ioctl(gphoto->bulb_fd, TIOCMBIS, &RTS_flag);
 
-        usleep(20000);
-        ioctl(gphoto->bulb_fd, TIOCMBIC, &RTS_flag);
-        close(gphoto->bulb_fd);
-        gphoto->bulb_fd = -1;
-        usleep(msec * 1000 - 20000);
-        return 0;
-    }
+    //     usleep(20000);
+    //     ioctl(gphoto->bulb_fd, TIOCMBIC, &RTS_flag);
+    //     close(gphoto->bulb_fd);
+    //     gphoto->bulb_fd = -1;
+    //     usleep(msec * 1000 - 20000);
+    //     return 0;
+    // }
 
     // Otherwise fail gracefully
     DEBUGDEVICE(device, INDI::Logger::DBG_ERROR, "Mirror lock feature is not yet implemented for this camera model.");
@@ -1082,10 +1088,13 @@ int gphoto_start_exposure(gphoto_driver *gphoto, uint32_t exptime_usec, int mirr
     // ###########################################################################################
     // We take this route if any of the following conditions are met:
     // 1. Predefined Exposure List does not exist for the camera.
-    // 2. An external shutter port or DSUSB is active.
-    // 3. Exposure Time > 1 second or there is no optimal exposure and we have a bulb widget to trigger the custom time
-    if (gphoto->exposureList == nullptr ||
-            (gphoto->bulb_port[0] || gphoto->dsusb) ||
+    // 2. DSUSB is active.
+    // 3. Exposure Time > 30 and or there is no optimal exposure and we have an external shutter connected; If exposure
+    //    time <= 0.2s forward to internal shutter release.
+    // 4. Exposure Time > 1 second or there is no optimal exposure and we have a bulb widget to trigger the custom time
+    if (gphoto->exposureList == nullptr || 
+            (gphoto->dsusb) ||
+            (gphoto->bulb_port[0] && (exptime_usec > 30e6 || optimalExposureIndex == -1) && (exptime_usec > 2e5)) || 
             (gphoto->bulb_widget != nullptr && (exptime_usec > 1e6 || optimalExposureIndex == -1)))
 
     {
@@ -1144,24 +1153,52 @@ int gphoto_start_exposure(gphoto_driver *gphoto, uint32_t exptime_usec, int mirr
         // Otherwise open regular remote serial shutter port
         else if (gphoto->bulb_port[0])
         {
-            DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Opening remote serial shutter port: %s ...", gphoto->bulb_port);
-            gphoto->bulb_fd = open(gphoto->bulb_port, O_RDWR, O_NONBLOCK);
-            if (gphoto->bulb_fd < 0)
-            {
-                DEBUGFDEVICE(device, INDI::Logger::DBG_ERROR, "Failed to open serial port: %s", gphoto->bulb_port);
+            // Open Nikon Shutter
+            DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Opening remote serial shutter FTDI: %s ...", gphoto->bulb_port);
+
+            // Gauge mirror pre-release time
+            exptime_usec = ((uint32_t) exptime_usec * 0.998588) + 1072054;
+
+            // Create new ftdi context
+            if ((gphoto->ftdi = ftdi_new()) == 0) {
+                DEBUGDEVICE(device, INDI::Logger::DBG_ERROR, "ftdi_new failed.");
                 pthread_mutex_unlock(&gphoto->mutex);
                 return -1;
             }
 
-            // Open Nikon Shutter
-            if (!strstr(device, "Nikon"))
+            // Create string for libftdi opener (depending on serial)
+            char ftdi_string[256+16] = "s:0x0403:0x6001:";
+            if (strcmp(gphoto->bulb_port, "auto") == 0)
             {
-                uint8_t open_shutter[3] = {0xFF, 0x01, 0x01};
-                if (write(gphoto->bulb_fd, open_shutter, 3) != 3)
-                    DEBUGDEVICE(device, INDI::Logger::DBG_WARNING, "Opening Nikon remote serial shutter failed.");
+                ftdi_string[0] = 'i';
+                ftdi_string[strlen(ftdi_string)-1] = '\0';
+            }
+            else
+            {
+                strcat(ftdi_string, gphoto->bulb_port);
             }
 
-            ioctl(gphoto->bulb_fd, TIOCMBIS, &RTS_flag);
+            // Open FTDI
+            if (ftdi_usb_open_string(gphoto->ftdi, ftdi_string) < 0)
+            {
+                DEBUGFDEVICE(device, INDI::Logger::DBG_WARNING, "Unable to open ftdi device: %s", ftdi_get_error_string(gphoto->ftdi));
+            }
+            else
+            {
+                // Opened flag
+                gphoto->bulb_fd = 0;
+
+                // Bitbang mode
+                ftdi_set_bitmode(gphoto->ftdi, 0xFF, BITMODE_BITBANG);
+
+                // Write shutter release
+                uint8_t buf[1] = {0x01};
+                if (ftdi_write_data(gphoto->ftdi, buf, 1) < 0)
+                {
+                    DEBUGFDEVICE(device, INDI::Logger::DBG_WARNING, "FTDI write failed for %x: %s", buf[0], ftdi_get_error_string(gphoto->ftdi));
+                } 
+            }
+
         }
         // Otherwise, let's fallback to the internal bulb widget
         else if (gphoto->bulb_widget)
@@ -1800,7 +1837,8 @@ gphoto_driver *gphoto_open(Camera *camera, GPContext *context, const char *model
             DEBUGFDEVICE(device, INDI::Logger::DBG_DEBUG, "Using external shutter release port: %s", gphoto->bulb_port);
     }
 
-    gphoto->bulb_fd = -1;
+    gphoto->bulb_fd = -1;	
+    gphoto->ftdi = nullptr;
 
     DEBUGDEVICE(device, INDI::Logger::DBG_DEBUG, "GPhoto initialized.");
 
