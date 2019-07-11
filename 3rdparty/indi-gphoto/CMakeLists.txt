@@ -26,6 +26,7 @@ find_package(LibRaw REQUIRED)
 find_package(USB1 REQUIRED)
 find_package(TIFF REQUIRED)
 find_package(TIFFXX REQUIRED)
+find_package(FTDI REQUIRED)
 
 include(CMakeCommon)
 include(CheckStructHasMember)
@@ -70,6 +71,8 @@ include_directories( ${GPHOTO2_INCLUDE_DIR})
 include_directories( ${LibRaw_INCLUDE_DIR})
 include_directories( ${USB1_INCLUDE_DIRS})
 include_directories( ${TIFF_INCLUDE_DIR})
+include_directories( ${FTDI_INCLUDE_DIR})
+
 
 ########### Gphoto ###########
 set(indigphoto_SRCS
@@ -87,7 +90,7 @@ SET_SOURCE_FILES_PROPERTIES(gphoto_readimage.cpp PROPERTIES COMPILE_FLAGS "-Wno-
 
 add_executable(indi_gphoto_ccd ${indigphoto_SRCS})
 
-target_link_libraries(indi_gphoto_ccd ${INDI_LIBRARIES} ${CFITSIO_LIBRARIES} ${GPHOTO2_LIBRARY} ${GPHOTO2_PORT_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${JPEG_LIBRARIES} ${LibRaw_LIBRARIES} ${ZLIB_LIBRARIES} ${TIFF_LIBRARY} ${TIFFXX_LIBRARY})
+target_link_libraries(indi_gphoto_ccd ${INDI_LIBRARIES} ${CFITSIO_LIBRARIES} ${GPHOTO2_LIBRARY} ${GPHOTO2_PORT_LIBRARY} ${CMAKE_THREAD_LIBS_INIT} ${JPEG_LIBRARIES} ${LibRaw_LIBRARIES} ${ZLIB_LIBRARIES} ${TIFF_LIBRARY} ${TIFFXX_LIBRARY} ${FTDI_LIBRARIES})
 
 if (HAVE_WEBSOCKET)
     target_link_libraries(indi_gphoto_ccd ${Boost_LIBRARIES})
